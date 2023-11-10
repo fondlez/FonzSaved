@@ -1,0 +1,20 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+  <Include file="base.lua"/>
+  <Include file="debug.lua"/>
+  <Include file="savedvar.lua"/>
+
+  <Include file="mods\util\package.lua"/>
+  <Include file="mods\util\table.lua"/>
+  <Include file="mods\util\string.lua"/>
+  <Include file="mods\util\time.lua"/>
+  
+  <Include file="mods\palette.lua"/>
+  <Include file="mods\cmdoptions.lua"/>
+  <Include file="mods\savedinstances.lua"/>
+  <Include file="mods\announce.lua"/>
+  <Include file="mods\raidleadersaved.lua"/>
+  <Include file="mods\whisper.lua"/>
+  <Include file="mods\lockout.lua"/>
+  
+  <Include file="slashcmd.lua"/>
+</Ui>

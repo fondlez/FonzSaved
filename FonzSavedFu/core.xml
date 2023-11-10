@@ -1,0 +1,12 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+  <Include file="base.lua"/>
+  <Include file="debug.lua"/>
+  
+  <Include file="mods\util\package.lua"/>
+  <Include file="mods\util\table.lua"/>
+  <Include file="mods\util\string.lua"/>
+  <Include file="mods\util\time.lua"/>
+  <Include file="mods\palette.lua"/>
+  
+  <Include file="core.lua"/>
+</Ui>

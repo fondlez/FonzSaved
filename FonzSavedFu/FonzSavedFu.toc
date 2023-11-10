@@ -1,0 +1,16 @@
+## Interface: 20400
+## Title: FonzSavedFu
+## Notes: Show Saved and Lockout instance information (GUI).
+## Author: fondlez
+## Version: 1.0.0
+## X-Website: http://github.com/fondlez
+## X-Category: Interface Enhancements
+## Dependencies: FonzSaved
+## OptionalDeps: UnicodeFont-tbc, UnicodeFont
+## SavedVariables: FonzSavedFuDB
+## SavedVariablesPerCharacter: FonzSavedFuCDB
+## DefaultState: enabled
+
+libs\embeds.xml
+locales\locales.xml
+core.xml

@@ -1,0 +1,14 @@
+## Interface: 20400
+## Title: FonzSaved
+## Notes: Show Saved and Lockout instance information. Commands: /saved, /fsconfig
+## Author: fondlez
+## Version: 1.0.0
+## X-Website: http://github.com/fondlez
+## X-Category: Interface Enhancements
+## OptionalDeps: FonzSavedFu
+## SavedVariables: FonzSavedDB
+## SavedVariablesPerCharacter: FonzSavedCDB
+## DefaultState: enabled
+
+locales\locales.xml
+core.xml
