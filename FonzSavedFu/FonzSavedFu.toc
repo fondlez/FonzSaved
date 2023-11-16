@@ -1,8 +1,8 @@
 ## Interface: 20400
 ## Title: FonzSavedFu
-## Notes: Show Saved and Lockout instance information (GUI).
+## Notes: Show saved instances and instance history. (GUI).
 ## Author: fondlez
-## Version: 1.0.0
+## Version: 1.1.0
 ## X-Website: http://github.com/fondlez
 ## X-Category: Interface Enhancements
 ## Dependencies: FonzSaved

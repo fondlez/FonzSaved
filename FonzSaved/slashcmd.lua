@@ -13,22 +13,26 @@ local lockout = A.require 'lockout'
 local raidleadersaved = A.require 'raidleadersaved'
 
 local util = A.requires(
-  'util.string'
+  'util.table',
+  'util.string',
+  'util.time'
 )
 
-local defaults = {
-  lang = A.locale_info.code
+local realm_defaults = {
+  lang = A.locale_info.code,
+  datetime_format = "ISO",
 }
 
-A.registerCharConfigDefaults(module_name, defaults)
+A.registerRealmDefaults(module_name, realm_defaults)
 
 local UnitName = UnitName
 local UnitClass = UnitClass
 
 local format = string.format
 local strlen = strlen
-local strlower = strlower
+local strlower, strupper = strlower, strupper
 local unpack = unpack or util.unpack
+local tinsert, tconcat = tinsert, table.concat
 
 function A.prefix()
   return format("{%s}", A.name)
@@ -224,7 +228,6 @@ end
 _G.SLASH_fs_rls1 = L["SLASHCMD_RLS"]
 _G.SLASH_fs_rls2 = L["SLASHCMD_RLS_ALT1"]
 
-
 do
   local pending_delete_this_lockout
   
@@ -251,7 +254,7 @@ do
           set = function(msg)
             local index = msg and tonumber(msg)
             if not index then 
-              A.error("No lockout index provided for deletion.")
+              A.warn("No lockout index provided for deletion.")
               return
             end
             pending_delete_this_lockout = index
@@ -264,6 +267,18 @@ do
           end,
           min = 1, max = 10, step = 1,
         },
+        Add = {
+          type = "execute",
+          name = L["Add Lockout"],
+          desc = L["Resets and adds a lockout inside an instance."],
+          func = lockout.addLockout,
+        },
+        Wipe = {
+          type = "execute",
+          name = L["Wipe Lockouts"],
+          desc = L["Wipes all lockouts."],
+          func = lockout.confirmWipeLockouts,
+        },        
       },
     }
     
@@ -273,6 +288,14 @@ end
 _G.SLASH_fs_lockout1 = L["SLASHCMD_LOCKOUT"]
 _G.SLASH_fs_lockout2 = L["SLASHCMD_LOCKOUT_ALT1"]
 _G.SLASH_fs_lockout3 = L["SLASHCMD_LOCKOUT_ALT2"]
+_G.SLASH_fs_lockout4 = L["SLASHCMD_LOCKOUT_ALT3"]
+_G.SLASH_fs_lockout5 = L["SLASHCMD_LOCKOUT_ALT4"]
+
+-- Convenience command to add a lockout
+function SlashCmdList.fs_lockout_add()
+  lockout.addLockout()
+end
+_G.SLASH_fs_lockout_add1 = L["SLASHCMD_LOCKOUT_ADD"]
 
 -- EVENTS --
 
@@ -344,11 +367,11 @@ do
     name = L["Language"],
     desc = L["Set the language of text."],
     get = function() 
-      local db = A.getCharConfig(module_name)
+      local db = A.getProfileRealm(module_name)
       return db.lang
     end,
     set = function(msg)
-      local db = A.getCharConfig(module_name)
+      local db = A.getProfileRealm(module_name)
       db.lang = msg and locale_codes[strlower(msg)]
       A.locale_info.code = db.lang or A.locale_info.code
       
@@ -379,5 +402,54 @@ do
     choiceOrder = { 
       "enUS", "deDE", "esES", "esMX", "frFR", "koKR", "ruRU", "zhCN", "zhTW" 
     },
+  }
+end
+
+do
+  local datetime_formats = {
+    "ISO", 
+    "FR", "DE", "GB", "US_CIV", "US_MIL", "CN",
+    "D-M-Y", "D.M.Y", "D/M/Y",
+    "Y-M-D", "Y.M.D", "Y/M/D",
+    "M-D-Y", "M/D/Y"
+  }
+  
+  A.options.args["datetime"] = {
+    type = "choice",
+    name = L["Date Time"],
+    desc = L["Set the date time format."],
+    get = function() 
+      local db = A.getProfileRealm(module_name)
+      return db.datetime_format
+    end,
+    set = function(msg)
+      if not msg then return end
+      msg = strupper(msg)
+      local db = A.getProfileRealm(module_name)
+      db.datetime_format = util.datetime_formats[msg] and msg
+    end,
+    usage = format("{ %s }", tconcat(datetime_formats, " | ")),
+    validate = function(msg)
+      return msg and util.datetime_formats[strupper(msg)]
+    end,
+    choices = {
+      ["ISO"] =L["International"], 
+      ["FR"] =L["France"],
+      ["DE"] =L["Germany"], 
+      ["GB"] =L["UK"], 
+      ["US_CIV"] =L["US Civilian"], 
+      ["US_MIL"] =L["US Military"], 
+      ["CN"] =L["China"],
+      ["D-M-Y"] =L["Day-Month-Year"], 
+      ["D.M.Y"] =L["Day.Month.Year"], 
+      ["D/M/Y"] =L["Day/Month/Year"],
+      ["Y-M-D"] =L["Year-Month-Day"], 
+      ["Y.M.D"] =L["Year.Month.Day"], 
+      ["Y/M/D"] =L["Year/Month/Day"],
+      ["M-D-Y"] =L["Month-Day-Year"], 
+      ["M/D/Y"] =L["Month/Day/Year"],
+    },
+    choiceType = "dict",
+    choiceOrder = datetime_formats,
   }
 end

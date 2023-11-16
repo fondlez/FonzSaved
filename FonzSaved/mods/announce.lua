@@ -8,7 +8,8 @@ local palette = A.require 'palette'
 local util = A.requires(
   'util.table',
   'util.string',
-  'util.time'
+  'util.time',
+  'util.group'
 )
 
 local GetChannelName = GetChannelName
@@ -268,6 +269,17 @@ do
       return
     end
   end
+end
+
+function M.announceMessage(message, channel, target)
+  if not channel then
+    A.warn("Invalid channel supplied.")
+    return
+  end
+  
+  local msg = format("%s%s", padPrefix(), message)
+
+  pcall(SendChatMessage, msg, channel, nil, target)
 end
 
 -- MODULE OPTIONS --

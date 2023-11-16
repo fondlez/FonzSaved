@@ -8,7 +8,8 @@ local announce = A.require 'announce'
 
 local util = A.requires(
   'util.table',
-  'util.string'
+  'util.string',
+  'util.group'
 )
 
 local format = string.format
@@ -57,21 +58,71 @@ do
   local IsRaidLeader, IsPartyLeader = IsRaidLeader, IsPartyLeader
   
   local listSelfRaids = announce.listSelfRaids
+  local getRaidLeader = util.getRaidLeader
+  
   local num_raiders
+  local already_queried_leader = false
 
   function frame:PLAYER_ENTERING_WORLD()
     if not UnitInRaid("player") then return end
+    
+    -- Already in a raid so must have already queried raid leader
+    already_queried_leader = true
+    
     if not (IsRaidLeader() or IsPartyLeader()) then return end
     
     num_raiders = GetRealNumRaidMembers()
     -- Attempt to prevent messages just from logging in
     setThrottle()
   end
+  
+  function M.queryRaidLeader()
+    local name, class, online, level = getRaidLeader()
+    if not name then 
+      A.warn("[module: %s] %s", module_name, "Unable to find raid leader name.")
+      return
+    end
+    
+    -- Minimum level for lowest level raid instance access is 50.
+    if level and tonumber(level) < 50 then
+      A.info("Raid leader level is too low to have access to raid instances.")
+      return
+    end
+    
+    if not online then
+      A:print(L["Raid leader is offline. Unable to query saved raids."])
+      return
+    end
+    
+    A:print(L["Attempting to query raid leader saved raids."])
+    
+    local whisper = A.require 'whisper'
+    -- Options:
+    -- * specific raid id
+    -- * suppress confirm
+    whisper.queryUnitName(name, nil, true)
+  end
 
   function frame:RAID_ROSTER_UPDATE()
     -- Stop if not or no longer group leader
     if not (IsRaidLeader() or IsPartyLeader()) then 
-      -- Reset
+      -- If not leader, yet in a raid and number of raiders unknown, must be
+      -- newly invited or in a converted raid group.
+      if not num_raiders then
+        if not already_queried_leader then
+          queryRaidLeader()
+          already_queried_leader = true
+        elseif already_queried_leader and GetRealNumRaidMembers() < 2 then
+          -- Note. above initial condition is not redundant due to 
+          -- short-circuit logical operator.
+          
+          -- Reset raid leader query if no longer in a raid group
+          already_queried_leader = false
+        end
+        return
+      end
+
+      -- Reset if just left group as previous raid leader
       num_raiders = nil
       return
     end

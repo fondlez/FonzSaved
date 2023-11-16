@@ -2,6 +2,8 @@ local A = FonzSavedFu
 
 A.module 'util.time'
 
+local format = string.format
+
 function M.epochTime()
   return time()
 end
@@ -34,25 +36,178 @@ function M.minDateTime()
   return t
 end
 
-function M.isoDate(t, epoch)
-  return not epoch and date("%Y-%m-%d", time(t)) or date("%Y-%m-%d", t)
+function M.isoTime(t, epoch, hide_seconds)
+  local seconds = hide_seconds and "" or ":%S"
+  return not epoch and date("%H:%M"..seconds, time(t))
+    or date("%H:%M"..seconds, t)
 end
 
-function M.isoTime(t, epoch, hide_seconds)
-  if not hide_seconds then
-    return not epoch and date("%H:%M:%S", time(t)) or date("%H:%M:%S", t)
-  else
-    return not epoch and date("%H:%M", time(t)) or date("%H:%M", t)
+do
+  local d_styles = {
+    ["ISO"] = function(timestamp)
+      return date("%Y-%m-%d", timestamp)
+    end,
+    ["FR"] = function(timestamp)
+      return date("%a %d %b", timestamp)
+    end,
+    ["DE"] = function(timestamp)
+      return date("%a, %d. %b", timestamp)
+    end,
+    ["GB"] = function(timestamp)
+      return date("%a, %d %b", timestamp)
+    end,
+    ["US_CIV"] = function(timestamp)
+      return date("%a %b %d", timestamp)
+    end,
+    ["US_MIL"] = function(timestamp)
+      return date("%a %b %d", timestamp)
+    end,
+    ["CN"] = function(timestamp)
+      return date("%Y 年 %m 月 %d 日", timestamp)
+    end,
+    ["D-M-Y"] = function(timestamp)
+      return date("%d-%m-%Y", timestamp)
+    end,
+    ["D.M.Y"] = function(timestamp)
+      return date("%d.%m.%Y", timestamp)
+    end,
+    ["D/M/Y"] = function(timestamp)
+      return date("%d/%m/%Y", timestamp)
+    end,
+    ["M-D-Y"] = function(timestamp)
+      return date("%m-%d-%Y", timestamp)
+    end,
+    ["M/D/Y"] = function(timestamp)
+      return date("%m/%d/%Y", timestamp)
+    end,
+    ["Y-M-D"] = function(timestamp)
+      return date("%Y-%m-%d", timestamp)
+    end,    
+    ["Y.M.D"] = function(timestamp)
+      return date("%Y.%m.%d", timestamp)
+    end,
+    ["Y/M/D"] = function(timestamp)
+      return date("%Y/%m/%d", timestamp)
+    end,
+  }
+  M.date_formats = d_styles
+  
+  local d_langs = {
+    -- enUS = defacto standard client, so set as international
+    ["enUS"] = d_styles["ISO"],
+    ["deDE"] = d_styles["DE"],
+    ["esES"] = d_styles["D/M/Y"],
+    ["esMX"] = d_styles["D/M/Y"],
+    ["frFR"] = d_styles["FR"],
+    ["koKR"] = d_styles["Y.M.D"],
+    ["ruRU"] = d_styles["D.M.Y"],
+    ["zhCN"] = d_styles["CN"],
+    ["zhTW"] = d_styles["Y-M-D"],
+  }
+  
+  function M.isoDate(t, epoch)
+    local style = d_styles["ISO"]
+    return not epoch and style(time(t)) or style(t)
+  end
+  
+  function M.localeDate(t, epoch, lang, date_format)
+    local style = date_format and d_styles[date_format] 
+      or lang and d_langs[lang]
+      or d_styles["ISO"]
+      
+    return not epoch and style(time(t)) or style(t)
   end
 end
 
-function M.isoDateTime(t, epoch, hide_seconds)
-  if not hide_seconds then
-    return not epoch and date("%Y-%m-%d %H:%M:%S", time(t)) 
-      or date("%Y-%m-%d %H:%M:%S", t)
-  else
-    return not epoch and date("%Y-%m-%d %H:%M", time(t)) 
-      or date("%Y-%m-%d %H:%M", t)  
+do
+  local dt_styles = {
+    ["ISO"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%Y-%m-%d %H:%M"..seconds, timestamp)
+    end,
+    ["FR"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%a %d %b %H:%M"..seconds, timestamp)
+    end,
+    ["DE"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%a, %d. %b %H:%M"..seconds, timestamp)
+    end,
+    ["GB"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%a, %d %b %H:%M"..seconds, timestamp)
+    end,
+    ["US_CIV"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%a %b %d %I:%M %p"..seconds, timestamp)
+    end,
+    ["US_MIL"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%a %b %d %H:%M"..seconds, timestamp)
+    end,
+    ["CN"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or " %S 秒"
+      return date("%Y 年 %m 月 %d 日 %H 時 %M 分"..seconds, timestamp)
+    end,
+    ["D-M-Y"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%d-%m-%Y %H:%M"..seconds, timestamp)
+    end,
+    ["D.M.Y"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%d.%m.%Y %H:%M"..seconds, timestamp)
+    end,
+    ["D/M/Y"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%d/%m/%Y %H:%M"..seconds, timestamp)
+    end,
+    ["M-D-Y"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%m-%d-%Y %H:%M"..seconds, timestamp)
+    end,
+    ["M/D/Y"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%m/%d/%Y %H:%M"..seconds, timestamp)
+    end,
+    ["Y-M-D"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%Y-%m-%d %H:%M"..seconds, timestamp)
+    end,    
+    ["Y.M.D"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%Y.%m.%d %H:%M"..seconds, timestamp)
+    end,
+    ["Y/M/D"] = function(timestamp, hide_seconds)
+      local seconds = hide_seconds and "" or ":%S"
+      return date("%Y/%m/%d %H:%M"..seconds, timestamp)
+    end,
+  }
+  M.datetime_formats = dt_styles
+  
+  local dt_langs = {
+    -- enUS = defacto standard client, so set as international
+    ["enUS"] = dt_styles["ISO"], 
+    ["deDE"] = dt_styles["DE"],
+    ["esES"] = dt_styles["D/M/Y"],
+    ["esMX"] = dt_styles["D/M/Y"],
+    ["frFR"] = dt_styles["FR"],
+    ["koKR"] = dt_styles["Y.M.D"],
+    ["ruRU"] = dt_styles["D.M.Y"],
+    ["zhCN"] = dt_styles["CN"],
+    ["zhTW"] = dt_styles["Y-M-D"],
+  }
+  
+  function M.isoDateTime(t, epoch, hide_seconds)
+    local style = dt_styles["ISO"]
+    return not epoch and style(time(t), hide_seconds) or style(t, hide_seconds)
+  end
+  
+  function M.localeDateTime(t, epoch, hide_seconds, lang, date_format)
+    local style = date_format and dt_styles[date_format] 
+      or lang and dt_langs[lang]
+      or dt_styles["ISO"]
+      
+    return not epoch and style(time(t), hide_seconds) or style(t, hide_seconds)
   end
 end
 

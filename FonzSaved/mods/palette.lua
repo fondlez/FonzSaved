@@ -138,6 +138,7 @@ M.color = {
   nero3 = c(42, 42, 42),
   orange = c(255, 146, 24),
 	yellow = c(255, 255, 13),
+  rose_bud = c(hexRgb("#FF9A9A")),
   
   gold_text = c(hexRgb(NORMAL_FONT_COLOR_CODE)),
   white_text = c(hexRgb(HIGHLIGHT_FONT_COLOR_CODE)),

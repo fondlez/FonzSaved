@@ -4,17 +4,18 @@ local L = A.locale
 local _, module_name = A.module 'lockout'
 
 --[[ Module: lockout
+
 A lockout is defined as a contribution to a count limit for entry into instance 
 zones.
 
 This module will not attempt to assume any specific count, but will track the
-lockouts that may apply within an hour. Typically, the limit in traditional WoW
-is 5 limits per hour per account.
+lockouts that may apply within at least an hour. Typically, the limit in 
+traditional WoW is 5 limits per hour per account.
 
 Research facts:
-1. Lockouts apply to an entire account.
+1. Lockouts apply to an entire account (*1).
 2. New lockouts are always created by a different character entering an 
-instance. (*)
+instance. (*2)
 3. Entering the same instance zone and difficulty on the same character with no
 change in group status does NOT create a new lockout.
 4. Resets allow entry into instance zones already entered, therefore the 
@@ -22,26 +23,40 @@ creation of new lockouts.
 5. Resets can occur by:
 a. Manually resetting all normal difficulty, non-raid instances, equivalent to 
 the API command `ResetInstances()`. Note LBRS/UBRS entrance overlap so treating 
-it as normal instance.
+it as normal instance. Further testing required with specific instances (*3)
 b. Changing instance difficulty setting will result in a more complete reset
 that includes unsaved heroics and raids.
 c. Entering a group will result in a more complete reset that includes unsaved 
 heroics and raids.
+6. Normal instance resets are NOT communicated to group members or even visible 
+via the API.
+7. Instance difficulty resets are communicated to group members via 
+CHAT_MSG_SYSTEM.
 
 Notes:
-* Does that include entering the same instance as held by another account?
-* How to reliably tell if given an id/id held for you, in general?
+(*1) Does that include cross-faction? Do resets apply cross-faction?
+(*2) Does that include entering the same instance as held by another account? 
+How to reliably tell if given an id/id held for you, in general?
+(*3) How do lockouts of instance zone groups behave, e.g. Dire Maul and Scarlet
+Monastery wings?
 
 --]]
 
 local palette = A.require 'palette'
 local savedinstances = A.require 'savedinstances'
+local announce = A.require 'announce'
 
 local util = A.requires(
   'util.table',
   'util.string',
-  'util.time'
+  'util.time',
+  'util.group',
+  'util.network'
 )
+
+local isPveGroup = util.isPveGroup
+local isPveInstance = util.isPveInstance
+local isPveGroupLeader = util.isPveGroupLeader
 
 local GetInstanceDifficulty = GetInstanceDifficulty
 local GetRealNumPartyMembers = GetRealNumPartyMembers
@@ -61,6 +76,7 @@ M.INSTANCE_DIFFICULTY = INSTANCE_DIFFICULTY
 
 local LOCKOUT_PERIODS = {
   hour = 60*60,
+  day = 24*60*60,
 }
 
 local NOTIFY_METHODS = {
@@ -71,15 +87,22 @@ local NOTIFY_METHODS = {
 
 local defaults = {
   notify_method = "chat",
+  announce_reset = true,
 }
 
 A.registerCharConfigDefaults(module_name, defaults)
 
 local realm_defaults = {
   lockouts = {},
+  maximum = 32,
 }
 
 A.registerRealmDefaults(module_name, realm_defaults)
+
+function isExpired(entry, period)
+  period = period or LOCKOUT_PERIODS.hour
+  return entry and time() > (entry + period)
+end
 
 do
   local strlen = strlen
@@ -100,7 +123,7 @@ do
     return t
   end
   
-  local function search(search_name, exact)
+  function M.findInstanceKey(search_name, exact)
     if not search_name or strlen(search_name) < 1 then return end
     
     if not merged_instance_names then
@@ -117,16 +140,17 @@ do
   end
   
   function M.findInstanceName(name)
-    local key = search(name)
+    local key = findInstanceKey(name)
     if not key then return end
     
     local translation = L["INSTANCE_ZONES"][key]
-    translation = translation == true and key or translation
-    return translation
+    return translation == true and key or translation
   end
 end
 
-function resetLockouts(reset_all)
+function resetLockouts(reset_all, reset_instance)
+  -- Ignore reset_instance and be conservative by resetting all normal or all
+  -- instances.
   local db = A.getProfileRealm(module_name)
   local lockouts = db.lockouts
   if not lockouts then return end
@@ -145,26 +169,80 @@ function resetLockouts(reset_all)
 end
 
 do
-  local function isSavedStale(lockout)
-    return time() > lockout.saved
-  end
-
-  local function isExpired(lockout)
-    return time() > (lockout.entry + LOCKOUT_PERIODS.hour)
+  local function isSavedStale(saved)
+    return saved and (time() > saved)
   end
   
   function cleanLockouts(lockouts)
     if not lockouts then return end
     
-    -- Cleanup lockouts, removing expired lockouts or stale saved instances
+    local n = getn(lockouts)
+    if n < 1 then return lockouts end
+    
+    local db = A.getProfileRealm(module_name)
+    
     local updated = {}
-    for i, lockout in ipairs(lockouts) do
-      if not (isExpired(lockout)
-          or (lockout.saved and isSavedStale(lockout))) then
-        tinsert(updated, lockout)
+    -- Resize from beginning if maximum allowed lockout table smaller than prior
+    local first = (n <= db.maximum) and 1 or (n - db.maximum + 1)
+    for i=first, n do
+      local lockout = lockouts[i]
+      -- Time-based "reset"
+      if isExpired(lockout.entry) or isSavedStale(lockout.saved) then
+        lockout.new = false
+      end
+      tinsert(updated, lockout)
+    end
+    
+    return updated
+  end
+  
+  function makeRoom(lockouts)
+    if not lockouts then return end
+    
+    local n = getn(lockouts)
+    local db = A.getProfileRealm(module_name)
+    if n < db.maximum then return end
+    
+    -- Remove first/oldest entry
+    table.remove(lockouts, 1)
+  end
+end
+
+do
+  local function errorMessage(msg)
+    UIErrorsFrame:AddMessage(msg, 1, .25, .25, 1, 1)
+  end
+
+  function notifyLockout()
+    local db = A.getCharConfig(module_name)
+    local notify_method = db.notify_method or "chat"
+    if notify_method == "none" then return end
+    
+    -- Find count of lockout within smallest lockout period
+    local lockouts = getLockouts()
+    local n = lockouts and getn(lockouts) or 0
+    if n < 1 then return end
+    
+    local count = 1
+    if n > 1 then
+      local thetime = time()
+      for i=n-1,1,-1 do
+        local time_ago = thetime - lockouts[i].entry
+        if time_ago < LOCKOUT_PERIODS.hour then
+          count = count + 1
+        end
       end
     end
-    return updated
+    
+    if notify_method == "chat" then
+      A:print(format("%s%s",
+        palette.color.lightyellow_text(L["New instance lockout: #"]), 
+        palette.color.red_text(tostring(count))))
+    elseif notify_method == "error" then
+      errorMessage(format("%s%s",
+        L["New instance lockout: #"], 
+        tostring(count)))
+    end
   end
 end
 
@@ -185,29 +263,6 @@ function isNewInstance(lockouts, zone, difficulty)
   
   return true
 end
-
-do
-  local function errorMessage(msg)
-    UIErrorsFrame:AddMessage(msg, 1, .25, .25, 1, 1)
-  end
-
-  function notifyLockout(num)
-    local db = A.getCharConfig(module_name)
-    local notify_method = db.notify_method or "chat"
-    
-    if notify_method == "none" then return end
-    
-    if notify_method == "chat" then
-      A:print(format("%s%s",
-        palette.color.lightyellow_text(L["New instance lockout: #"]), 
-        palette.color.red_text(tostring(num))))
-    elseif notify_method == "error" then
-      errorMessage(format("%s%s",
-        L["New instance lockout: #"], 
-        tostring(num)))
-    end
-  end
-end
   
 function M.getLockouts()
   local db = A.getProfileRealm(module_name)
@@ -216,10 +271,8 @@ function M.getLockouts()
 end
 
 function checkLockouts()  
-  -- Stop unless inside non-PvP instance
-  local is_instance, instance_type = IsInInstance()
+  local is_instance, instance_type = isPveInstance()
   if not is_instance then return end
-  if instance_type == "pvp" or instance_type == "arena" then return end
   
   local zone = GetRealZoneText()
   if not zone or strlen(zone) < 1 then
@@ -238,6 +291,7 @@ function checkLockouts()
   
   -- Only one "new" instance for the same player, zone and difficulty is allowed
   if isNewInstance(lockouts, zone, difficulty) then
+    makeRoom(lockouts)
     tinsert(lockouts, {
       name = A.player.name,
       class = A.player.class,
@@ -248,7 +302,7 @@ function checkLockouts()
       entry = thetime,
       new = true,
     })
-    notifyLockout(getn(lockouts))
+    notifyLockout()
   end
 end
 
@@ -320,35 +374,43 @@ do
   local class_colors = palette.color.classes
   
   local formatDurationFull = util.formatDurationFull
-  local isoTime = util.isoTime
+  local localeDateTime = util.localeDateTime
   
   local function formatDuration(duration, lang)
     -- Options: color + hide seconds
     return formatDurationFull(duration, false, true, lang)
   end
   
-  local function formatTime(timestamp)
+  local function formatDateTime(timestamp)
+    local db = A.getProfileRealm("slashcmd")
     -- Options: 
     -- * is epoch, i.e. it comes from Lua time()
     -- * hide seconds
-    return isoTime(timestamp, true, true)
+    -- * lang
+    -- * datetime_format
+    return localeDateTime(timestamp, true, true, nil, db.datetime_format)
   end
   
   local styles = {
     ["header"] = function(heading)
       return palette.color.gold_text(heading)
     end,
+    ["1h"] = function(text)
+      return palette.color.green_text(text)
+    end,
+    ["24h"] = function(text)
+      return palette.color.lightyellow_text(text)
+    end,
+    ["older"] = function(text)
+      return palette.color.rose_bud(text)
+    end,
     ["character"] = function(name, class)
       return class_colors[strlower(class)](name)
     end,
-    ["entered"] = function(text)
-      return palette.color.gray_text(text)
-    end,  
-    ["saved"] = function(text)
-      return palette.color.lightyellow_text(text)
-    end,  
-    ["savedinstance"] = function(text)
-      return palette.color.lightyellow_text(text)
+    ["status"] = function(saved, added)
+      return saved and palette.color.lightyellow_text(L["saved"])
+        or added and palette.color.blue2(L["added"])
+        or palette.color.gray_text(L["entered"])
     end,
     ["difftype"] = function(difficulty, instance_type)
       return instance_type =="raid" and L["raid"]
@@ -357,8 +419,22 @@ do
     end,
     ["duration"] = function(duration)
       return palette.color.green_text(formatDuration(duration))
-    end,  
+    end,
+    ["bracket"] = function(text, color)
+      color = color or palette.color.white_text
+      return format("%s%s%s", color("["), text or '', color("]"))
+    end,
   }
+  
+  local function formatLockoutEntry(entry, time_ago)
+    if time_ago < 60*60 then
+      return styles["bracket"](styles["1h"](formatDateTime(entry)))
+    elseif time_ago < 24*60*60 then
+      return styles["bracket"](styles["24h"](formatDateTime(entry)))
+    else
+      return styles["bracket"](styles["older"](formatDateTime(entry)))
+    end
+  end
   
   -- Example format:
   -- 5. [<entry time>] <alt> "entered/saved to" <instance> - normal/heroic 
@@ -368,11 +444,10 @@ do
     local instance_name = findInstanceName(lockout.zone) or lockout.zone
     
     local msg = format("%s %s %s %s %s %s",
-      format("[%s]", formatTime(lockout.entry)),
+      formatLockoutEntry(lockout.entry, time_ago),
       styles["character"](lockout.name, lockout.class),
-      lockout.saved and styles["saved"](L["saved to"]) 
-        or styles["entered"](L["entered"]),
-      lockout.saved and styles["savedinstance"](instance_name) or instance_name,
+      styles["status"](lockout.saved, lockout.added),
+      instance_name,
       format("- %s", styles["difftype"](lockout.difficulty, lockout.type)),
       format("(%s)", formatDuration(time_ago))
     )
@@ -389,20 +464,21 @@ do
     end
     
     local msgtable = {}
-    -- List lockouts in reverse order of entry but numbered from latest.
-    for i=n,1,-1 do
+    -- List entries in normal order for chat so that latest is at the bottom
+    for i=1,n do
       local lockout = lockouts[i]
-      tinsert(msgtable, format("%d. %s", i, formatLockout(lockout)))
+      tinsert(msgtable, format("%02d. %s", i, formatLockout(lockout)))
     end
     
     A:print(format("%s\n%s", 
-      styles["header"](L["Instance lockouts:"]),
+      styles["header"](L["Instances:"]),
       tconcat(msgtable, "\n")
     ))
   end
   
   local confirm_delete_lockout_name
     = format("%s%s", A.name, "_ConfirmDeleteLockout")
+    
   StaticPopupDialogs[confirm_delete_lockout_name] = {
     text = L["Delete this lockout?"],
     button1 = TEXT(YES),
@@ -439,7 +515,7 @@ do
     local lockouts = getLockouts()
     
     local n = lockouts and getn(lockouts) or 0
-    if not lockouts or n < 1 then
+    if n < 1 then
       A:print(styles["header"](L["You have 0 instance lockouts."]))
       return
     end
@@ -452,6 +528,88 @@ do
     delete_this_lockout = index
     StaticPopup_Show(confirm_delete_lockout_name)
   end
+  
+  function M.addLockout()
+    local is_instance, instance_type = isPveInstance()
+    if not is_instance then 
+      A:print(styles["header"](L["You are not inside an instance."]))
+      return
+    end
+    
+    local zone = GetRealZoneText()
+    if not zone or strlen(zone) < 1 then
+      A.warn("No instance zone name. Potential lockout not registered.")
+      return
+    end
+    
+    local difficulty = GetInstanceDifficulty()
+    if not difficulty then
+      A.warn("Unknown instance difficulty. Potential lockout not registered")
+      return
+    end
+    
+    -- Force reset based on type of instance.
+    if instance_type == "raid" or difficulty == INSTANCE_DIFFICULTY.heroic then
+      resetLockouts(true)
+    else
+      resetLockouts()
+    end
+    
+    local thetime = time()
+    local lockouts = getLockouts()
+    
+    makeRoom(lockouts)
+    tinsert(lockouts, {
+      name = A.player.name,
+      class = A.player.class,
+      faction = A.player.faction,
+      zone = zone,
+      difficulty = difficulty,
+      type = instance_type,
+      entry = thetime,
+      new = true,
+      added = true,
+    })
+      
+    notifyLockout()
+    
+    return true
+  end
+  
+  local confirm_wipe_lockouts = format("%s%s", A.name, "_ConfirmWipeLockouts")
+  
+  StaticPopupDialogs[confirm_wipe_lockouts] = {
+    text = L["Wipe ALL lockouts?"],
+    button1 = TEXT(YES),
+    button2 = TEXT(NO),
+    OnAccept = function()
+      wipeLockouts()
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+  } 
+  
+  function M.confirmWipeLockouts()
+    local lockouts = getLockouts()
+    
+    local n = lockouts and getn(lockouts) or 0
+    if n < 1 then
+      A:print(styles["header"](L["You have 0 instance lockouts."]))
+      return
+    end
+    
+    StaticPopup_Show(confirm_wipe_lockouts)
+  end
+  
+  function M.wipeLockouts()
+    local db = A.getProfileRealm(module_name)
+    local lockouts = db.lockouts
+    if not lockouts then return end
+    
+    db.lockouts = nil
+    listLockouts()
+  end
 end
 
 -- EVENTS --
@@ -459,21 +617,13 @@ end
 local frame = CreateFrame("Frame")
 M.event_frame = frame
 
-local is_action_needed = false
-
 do
   local dispatcher = CreateFrame("Frame")
   dispatcher:SetScript("OnUpdate", function()
-    if not is_action_needed then
-      dispatcher.func = nil
-      dispatcher:Hide()
-      return
-    end
     if dispatcher.func and GetTime() >= dispatcher.timestamp then
       A.debug("Scheduled func dispatched.")
       dispatcher.func(dispatcher.args and unpack(dispatcher.args))
       dispatcher.func = nil
-      is_action_needed = false
       dispatcher:Hide()
     end
   end)
@@ -491,7 +641,7 @@ do
   end
 end
 
--- NEW LOCKOUTS --
+-- EVENTS: NEW LOCKOUTS --
 
 do
   local first_login = true
@@ -522,28 +672,26 @@ do
       
       -- Schedule lockouts check due to lack of updates to zone API
       schedule(checkLockouts, 1.5) -- delay 1.5s
-      is_action_needed = true
     end
   end
 end
 
-do
-  local first_login = true
+do  
+  local first_login_world = true
+  local first_login_party = true
   local is_solo = true
   
-  local function isInGroup()
-    -- Only interested in group membership outside of PvP (battlegrounds)
-    return GetRealNumPartyMembers() > 0 or GetRealNumRaidMembers() > 0
-  end
-  
   function frame:PARTY_MEMBERS_CHANGED()
-    if first_login then 
-      -- Should never be entered since PLAYER_ENTERING_WORLD fires first.
-      A.error("Impossible to join a group on login.")
+    -- Assumes PARTY_MEMBERS_CHANGED always fires on login if in a group.
+    
+    -- Stop if first login and PLAYER_ENTERING_WORLD already set group status. 
+    -- Resets can only occur when joining a group, i.e. from solo.
+    if first_login_party and not is_solo then
+      first_login_party = false
       return
     end
     
-    local in_group = isInGroup()
+    local in_group = isPveGroup()
     
     -- Joining a new group effectively resets instances
     if is_solo and in_group then
@@ -559,36 +707,207 @@ do
   end
 
   function frame:PLAYER_ENTERING_WORLD()
-    is_solo = not isInGroup()
+    -- Note. Necessary to use Unit functions before group events fire for
+    -- reliable group status.
+    is_solo = not (UnitInRaid("player") or UnitInParty("player"))
+
+    -- Stop if already logged into world
+    if not first_login_world then return end
+    first_login_world = false
     
-    -- Stop if already logged in
-    if not first_login then return end
-    first_login = false
+    -- Stop if not in an instance
+    local is_instance, instance_type = isPveInstance()
+    if not is_instance then return end
     
     A.trace("Logged into an instance. Checking for new lockout.")
     -- Schedule lockouts check due to lack of updates to zone API
     schedule(checkLockouts, 5.0) -- delay 5s
-    is_action_needed = true
   end
 end
 
--- RESETS --
+-- EVENTS: RESETS (COMMUNICATION) --
+
+local INSTANCE_TYPES = {
+  party = 1,
+  raid = 2,
+}
+
+local RESET_TYPES = {
+  normal = 1,
+  difficulty = 2,
+}
+
+local COMMANDS = {
+  --[[
+  Name chosen to function as a basic protocol in case other addons need to
+  easily pickout reset messages from all addon messages.
+  This is almost identical to TBC Classic's Nova Instance Tracker addon's 
+  basic reset message, except Nova compresses all message content.
+  --]]
+  instancereset = "instancereset"
+}
+
+local reset_messages = {
+  ["PARTY"] = function(sender)
+    return format(L["Party leader %s has reset all normal instances."], 
+      sender)
+  end,
+  ["RAID"] = function(sender)
+    return format(L["Raid leader %s has reset all unsaved normal instances."], 
+      sender)
+  end,
+}
+
+function compareLastInstance(zone, entry, instance_type, difficulty)
+  local lockouts = getLockouts()
+  local n = lockouts and getn(lockouts) or 0
+  if n < 1 then return end
+  
+  -- Basic checks for zone name and lockout period required
+  if not zone then return end
+  if entry and isExpired(entry) then return end
+  
+  local found = false
+  for i=n,1,-1 do
+    local lockout = lockouts[i]
+    -- Find unsaved instance comparing zone name by token/key, not translation
+    if not lockout.saved 
+        and findInstanceKey(lockout.zone, true) == findInstanceKey(zone, true)
+        and not isExpired(lockout.entry) then
+      -- Default is found true if saved, zone and entry conditions met
+      -- UNLESS more restrictive conditions are present and fail
+      found = true
+      if instance_type and lockout.type ~= instance_type then
+        found = false
+      end
+      if difficulty and lockout.difficulty ~= difficulty then
+        found = false
+      end
+    end
+    if found then break end
+  end
+  
+  return found
+end
+
+do
+  local formatDurationFull = util.formatDurationFull
+  local deserialize = util.deserialize
+  local keyByValue = util.keyByValue
+  
+  local function formatDuration(duration, lang)
+    -- Options: color + hide seconds
+    return formatDurationFull(duration, false, true, lang)
+  end
+  
+  local function printResetInfo(payload)
+    local n = payload and getn(payload) or 0
+    if n < 1 then return end
+    
+    local instance = payload[1]
+    n = type(instance) == "table" and getn(instance)
+    if n and n > 0 then
+      local zone = instance[1]
+      local entry = n > 1 and tonumber(instance[2])
+      local instance_type = n > 2 and keyByValue(INSTANCE_TYPES, instance[3])
+      local difficulty = n > 3 and tonumber(instance[4])
+      
+      local has_shared_instance = compareLastInstance(zone, entry, 
+        instance_type, difficulty)
+      if not has_shared_instance then return end
+      
+      local msg = format("%s", palette.color.green_text(zone))
+      if difficulty then
+        local str = keyByValue(INSTANCE_DIFFICULTY, difficulty, true)
+        msg = str and format("%s - %s", msg, L[str])
+      end
+      if entry then
+        local ago = time() - entry
+        msg = format("%s (%s)", msg, formatDuration(ago))
+      end
+      
+      A:print(format(L["Latest shared instance: %s."], msg))
+    elseif not n and strlen(tostring(instance)) > 0 then
+      local has_shared_instance = compareLastInstance(instance)
+      if not has_shared_instance then return end
+      
+      local msg = format("%s", palette.color.green_text(instance))
+      A:print(format(L["Latest shared instance: %s."], msg))
+    end
+  end
+  
+  local function printReset(channel, sender)
+    A:print(reset_messages[channel](sender))
+  end
+  
+  function frame:CHAT_MSG_ADDON(prefix, msg, channel, sender)
+    if prefix ~= A.name then return end
+    if sender == A.player.name then return end
+    if not (channel == "PARTY" or channel == "RAID") then return end
+    if not msg or strlen(msg) < 1 then
+      A.warn("[module: %s] %s", module_name, "Empty message received.")
+      return
+    end
+    if not isPveGroupLeader(sender) then 
+      A.warn("[module: %s] %s %s", module_name, 
+        "Reset command is not from a group leader. Sender:", sender)
+      return
+    end
+    
+    A.debug("Deserialize input: %s", msg)
+    
+    local command, instruction, payload = deserialize(msg)
+    if not command or command ~= COMMANDS.instancereset then 
+      A.warn("[module: %s] %s", module_name, "Received invalid command.")
+      return
+    end
+    -- Instance reset command must have an instruction for the type of reset
+    if not instruction or not tonumber(instruction) then 
+      A.warn("[module: %s] %s", module_name, 
+        "Received invalid instance reset instruction.")
+      return
+    end
+    
+    A.trace("command and instruction present.")
+    
+    -- Reset
+
+    instruction = tonumber(instruction)
+    if instruction == RESET_TYPES.normal then
+      printReset(channel, sender)
+      resetLockouts()
+    elseif instruction == RESET_TYPES.difficulty then
+      A.info("Group leader reset by changing instance difficulty.")
+      -- Not necessary to reset lockouts here because this reset type
+      -- is broadcast to group by server, visible as CHAT_MESSAGE_SYSTEM.
+    else
+      A.warn("[module: %s] %s %s", module_name, 
+        "Received unknown reset instruction:", tostring(instruction))
+    end
+    
+    -- Reset payload treated as informational only
+    printResetInfo(payload)
+  end
+end
 
 do
   local strmatch = string.match
   local gsub = string.gsub
+  
+  local serialize = util.serialize
+  local send = util.send
   
   local first_login = true
   
   -- Convert Lua formatstring to Lua string pattern
   local function f2p(formatstring)
     -- Save string formatters
-    formatstring = (gsub(formatstring, "%%s", "¬@s"))
+    formatstring = gsub(formatstring, "%%s", "¬@s")
     -- Escape pattern magic characters
-    formatstring = (gsub(formatstring, "([%^%$%(%)%%%.%[%]%*%+%?%)%-])", 
-      "%%%1"))
+    formatstring = gsub(formatstring, "([%^%$%(%)%%%.%[%]%*%+%?%)%-])", 
+      "%%%1")
     -- Unescape string formatters
-    return (gsub(formatstring, "¬@s", "%[%%P%%S%]%+"))
+    return (gsub(formatstring, "¬@s", "%(%.%+%)"))
   end
   
   local PATTERNS = {
@@ -596,14 +915,47 @@ do
     INSTANCE_RESET_SUCCESS = f2p(INSTANCE_RESET_SUCCESS),
   }
   
+  local function getLastUnsavedLockout()
+    local lockouts = getLockouts()
+    local n = lockouts and getn(lockouts) or 0
+    if n < 1 then return end
+    
+    for i=n,1,-1 do
+      local lockout = lockouts[i]
+      if not lockout.saved and not isExpired(lockout.entry) then
+        return lockout
+      end
+    end
+  end
+  
+  local function formatPayload(zone, entry, instance_type, difficulty)
+    return {
+      { zone, entry, INSTANCE_TYPES[instance_type], difficulty, }
+    }
+  end
+  
+  local function sendReset(reset_type, group, lockout)
+    local payload
+    if lockout then
+      payload = formatPayload(lockout.zone, lockout.entry, lockout.type,
+        lockout.difficulty)
+    end
+    
+    local msg = serialize(COMMANDS.instancereset, RESET_TYPES[reset_type], 
+      payload)
+    A.debug("Serialize output: %s", msg)
+    send(msg, group)
+  end
+  
   function frame:CHAT_MSG_SYSTEM(msg, param1)    
     if not msg then return end
-    -- Blizzard's GlobalStrings.lua:
-    -- ERR_DUNGEON_DIFFICULTY_CHANGED_S = 
-    --   "Dungeon Difficulty set to %s. (All saved instances have been reset)";
-    -- INSTANCE_RESET_SUCCESS = "%s has been reset.";
-    -- Assumes that, %s is a single word like "Normal" or "Heroic" in all
-    -- locales.
+    --[[ Blizzard's GlobalStrings.lua:
+    
+    - ERR_DUNGEON_DIFFICULTY_CHANGED_S = 
+      "Dungeon Difficulty set to %s. (All saved instances have been reset)";
+    - INSTANCE_RESET_SUCCESS = "%s has been reset.";
+    
+    --]]
     if strmatch(msg, PATTERNS["ERR_DUNGEON_DIFFICULTY_CHANGED_S"]) then
       -- Ignore spurious ERR_DUNGEON_DIFFICULTY_CHANGED_S message if inside
       -- instance on login.
@@ -617,12 +969,48 @@ do
       -- Reset normals + unsaved heroics + unsaved raids
       A.trace("resetLockouts(true) from ERR_DUNGEON_DIFFICULTY_CHANGED_S")
       resetLockouts(true)
-    elseif strmatch(msg, PATTERNS["INSTANCE_RESET_SUCCESS"]) then      
+      
+      -- If in group and leader, send reset via addon channel.
+      -- No need to announce this type of reset since it is visible to group.
+      local group = isPveGroup()
+      if not group then return end
+      if not isPveGroupLeader() then return end
+      
+      local lockout = getLastUnsavedLockout()
+      sendReset("difficulty", group, lockout)
+      return
+    end
+    
+    local reset_instance = strmatch(msg, PATTERNS["INSTANCE_RESET_SUCCESS"])
+    if reset_instance then
       -- Reset normals only
-      resetLockouts()
+      resetLockouts(nil, reset_instance)
+
+      -- If in group and leader, announce to group and send reset via addon 
+      -- channel.
+      local group = isPveGroup()
+      if not group then return end
+      if not isPveGroupLeader() then return end
+      
+      local msg = reset_messages[group](A.player.name)
+      local lockout = getLastUnsavedLockout()
+      if lockout then
+        msg = format("%s %s", msg, L["Latest instance: %s."])
+        msg = format(msg, palette.color.green_text(lockout.zone))
+      end
+      
+      local db = A.getCharConfig(module_name)
+      if db.announce_reset then
+        announce.announceMessage(msg, group)
+      end
+      sendReset("normal", group, lockout)
     end
   end
 end
+
+-- Fires when an addon communication message is received
+-- args: prefix, text, channel, sender
+frame:RegisterEvent("CHAT_MSG_ADDON")
 
 -- Fires when a system message is received
 frame:RegisterEvent("CHAT_MSG_SYSTEM")
@@ -644,7 +1032,7 @@ frame:RegisterEvent("UPDATE_INSTANCE_INFO")
 frame:SetScript("OnEvent", function()
   local event_method = frame[event]
   if event_method then
-    event_method(this, arg1, arg2)
+    event_method(this, arg1, arg2, arg3, arg4)
   end
 end)
 
@@ -690,6 +1078,38 @@ A.options.args["lockout"] = {
       choiceOrder = { 
         "none", "chat", "error",
       },
+    },
+    Maximum = {
+      type = "range",
+      name = L["Maximum Instances"],
+      desc = L["Set maximum number of tracked instances."],
+      get = function() 
+        local db = A.getProfileRealm(module_name)
+        return db.maximum
+      end,
+      set = function(msg) 
+        local db = A.getProfileRealm(module_name)
+        db.maximum = tonumber(msg)
+      end,
+      usage = L["<number: greater than 0>"],
+      validate = function(msg)
+        local n = msg and strlen(msg) > 0 and tonumber(msg)
+        return n and n > 0
+      end,
+      min = 1, max = 60, softMin = 1, softMax = 32, step = 1, bigStep = 10,
+    },
+    Announce = {
+      type = "toggle",
+      name = L["Announce Resets"],
+      desc = L["Toggle whether to announce resets to group chat."],
+      get = function() 
+        local db = A.getCharConfig(module_name)      
+        return db.announce_reset
+      end,
+      set = function()
+        local db = A.getCharConfig(module_name)      
+        db.announce_reset = not db.announce_reset
+      end,
     },
   },
 }

@@ -41,9 +41,9 @@ function canWhisper(be_quiet)
   return true
 end
 
-function confirmQuery(target)
+function confirmQuery(target, suppress_confirm)
   local db = A.getCharConfig(module_name)
-  if db.quiet then return end
+  if db.quiet or suppress_confirm then return end
   
   A:print(format(L["Query sent to %s."], target))
 end
@@ -269,14 +269,16 @@ do
   frame:SetScript("OnEvent", function()
     if arg1 ~= A.name then return end
     if arg3 ~= "WHISPER" then return end
+    if arg4 == A.player.name then return end
     if not arg2 or strlen(arg2) < 1 then 
-      A.warn("[module: %s] %s", module_name, "Empty message.")
+      A.warn("[module: %s] %s", module_name, "Empty message received.")
       return
     end
+    
+    local sender = arg4 or L["Unknown"]
    
     -- Split message by block delimiter
     local msgtable = { strsplit(";", arg2) }
-    local sender = arg4 or L["Unknown"]
     local msgtype = msgtable[1]
     
     local processMsg = frame.dispatch[msgtype]
@@ -325,7 +327,7 @@ do
     return true
   end
 
-  function M.queryUnitName(name, raid_name)
+  function M.queryUnitName(name, raid_name, suppress_confirm)
     if not canWhisper() then return end
     
     local raid_id = findRaidIdByName(raid_name)
@@ -338,7 +340,7 @@ do
     
     -- Check not already sent message to this name recently
     if not seen then
-      confirmQuery(name)
+      confirmQuery(name, suppress_confirm)
       
       local ok = pcall(SendAddonMessage, A.name, formatQuery(raid_id), 
         "WHISPER", name)

@@ -13,11 +13,11 @@ FonzSavedFu_LocaleInfo.catalogs["enUS"] = {
   ["Hide Errors"] = true,
   ["Hide Fubar text for zero saved instances"] = true,
   ["Hide errors in chat for graphical options."] = true,
-  ["Hide minimap icon"] = true,
   ["Hide the Fubar text when characters have zero saved instances."] = true,
   ["Hold %s button to view instance lockouts."] = true,
   ["Instance ID"] = true,
   ["Instance"] = true,
+  ["Instances"] = true,
   ["Interface"] = true,
   ["No instance lockouts."] = true,
   ["No saved instances."] = true,
@@ -29,10 +29,15 @@ FonzSavedFu_LocaleInfo.catalogs["enUS"] = {
   ["Short Fubar text"] = true,
   ["Status"] = true,
   ["Type"] = true,
+  ["[Older]"] = true,
+  ["[Past 24 hours]"] = true,
+  ["[Past hour]"] = true,
+  ["added"] = true,
   ["entered"] = true,
   ["heroic"] = true,
   ["normal"] = true,
   ["raid"] = true,
+  ["saved"] = true,
   
   ------------------------------------------------------------------------------
   

@@ -85,8 +85,9 @@ function A:OnEnable()
   local lockout_options = FonzSaved.options.args["lockout"]
   lockout_options.order = 450
   local lang_option = FonzSaved.options.args["lang"]
-  lang_option.order = 500
-  
+  lang_option.order = 110
+  local datetime_option = FonzSaved.options.args["datetime"]
+  datetime_option.order = 120
   -- Font paths added after login due to other addons changing default fonts,
   -- e.g. UnicodeFont
   local chat_font_path = ChatFontNormal:GetFont()
@@ -117,6 +118,7 @@ function A:OnEnable()
       rls = rls_options,
       lockout = lockout_options,
       lang = lang_option,
+      datetime = datetime_option,
       gui = {
         name = L["Interface"],
         desc = L["Graphical options"],
@@ -157,7 +159,7 @@ do
   local color_keypress = palette.c(palette.hexRgb("#eda55f"))
   local class_colors = palette.color.classes
   local formatDurationFull = util.formatDurationFull
-  local isoDateTime = util.isoDateTime
+  local localeDateTime = util.localeDateTime
   local isoTime = util.isoTime
   local sortedPairs = util.sortedPairs
   local sortRecords = util.sortRecords1
@@ -174,10 +176,11 @@ do
   end
   
   local function formatDateTime(timestamp)
+    local db = FonzSaved.getProfileRealm("slashcmd")
     -- Options: 
     -- * is epoch, i.e. it comes from Lua time()
     -- * hide seconds
-    return isoDateTime(timestamp, true, true)
+    return localeDateTime(timestamp, true, true, nil, db.datetime_format)
   end
   
   local function formatTime(timestamp)
@@ -194,6 +197,15 @@ do
     ["heading"] = function(heading)
       return palette.color.white_text(heading)
     end,
+    ["1h"] = function(text)
+      return palette.color.green_text(text)
+    end,
+    ["24h"] = function(text)
+      return palette.color.lightyellow_text(text)
+    end,
+    ["older"] = function(text)
+      return palette.color.rose_bud(text)
+    end,
     ["id"] = function(id)
       return palette.color.gray_text(id)
     end,
@@ -201,7 +213,7 @@ do
       return palette.color.gold_text(name)
     end,
     ["instance"] = function(name)
-      return palette.color.lightyellow_text(name)
+      return palette.color.white_text(name)
     end,
     ["duration"] = function(duration)
       local locale_code = A.locale_info.code
@@ -223,23 +235,28 @@ do
     ["entry"] = function(timestamp)
       return palette.color.white_text(formatTime(timestamp))
     end,
-    ["status"] = function(saved)
-      return not saved and palette.color.gray_text(L["entered"])
-        or palette.color.gold_text(L["saved"])
+    ["status"] = function(saved, added)
+      return saved and palette.color.gold_text(L["saved"])
+        or added and palette.color.blue2(L["added"])
+        or palette.color.gray_text(L["entered"])
     end,
     ["difftype"] = function(difficulty, instance_type)
       local INSTANCE_DIFFICULTY 
         = FonzSaved.require("lockout").INSTANCE_DIFFICULTY
       return instance_type =="raid" 
-          and palette.color.lightyellow_text(L["raid"])
+          and palette.color.white_text(L["raid"])
         or difficulty == INSTANCE_DIFFICULTY.heroic 
-          and palette.color.lightyellow_text(L["heroic"])
+          and palette.color.white_text(L["heroic"])
         or palette.color.gray_text(L["normal"])
     end,
     ["ago"] = function(duration)
       local locale_code = A.locale_info.code
-      return palette.color.green_text(formatDuration(duration, 
+      return palette.color.white_text(formatDuration(duration, 
         locale_code))
+    end,
+    ["bracket"] = function(text, color)
+      color = color or palette.color.white_text
+      return format("%s%s%s", color("["), text or '', color("]"))
     end,
   }
   
@@ -412,6 +429,29 @@ do
     local function formatTableHeader(category)
       local locale_font = A:getLocaleFont("GameTooltipText")
       category:AddLine(
+        "text", styles["heading"](""),
+        "font", locale_font,
+        "justify", "LEFT",
+        "text2", styles["1h"](L["[Past hour]"]),
+        "font2", locale_font,
+        "justify2", "CENTER",
+        "text3", styles["heading"](""),
+        "font3", locale_font,      
+        "justify3", "CENTER",
+        "text4", styles["24h"](L["[Past 24 hours]"]),
+        "font4", locale_font,
+        "justify4", "CENTER",
+        "text5", styles["heading"](""),
+        "font5", locale_font,
+        "justify5", "CENTER",
+        "text6", styles["older"](L["[Older]"]),
+        "font6", locale_font,
+        "justify6", "CENTER",
+        "text7", styles["heading"](""),
+        "font7", locale_font,
+        "justify7", "CENTER"
+      )
+      category:AddLine(
         "text", styles["heading"](L["#"]),
         "font", locale_font,
         "justify", "LEFT",
@@ -435,6 +475,16 @@ do
         "justify7", "RIGHT"
       )
     end
+    
+    local function formatLockoutEntry(entry, time_ago)
+      if time_ago < 60*60 then
+        return styles["bracket"](styles["1h"](formatDateTime(entry)))
+      elseif time_ago < 24*60*60 then
+        return styles["bracket"](styles["24h"](formatDateTime(entry)))
+      else
+        return styles["bracket"](styles["older"](formatDateTime(entry)))
+      end
+    end
   
     local function formatLockout(category, lockout, count)
       local locale_font = A:getLocaleFont("GameTooltipText")
@@ -445,13 +495,13 @@ do
         "text", styles["count"](count),
         "font", locale_font,
         "justify", "LEFT",
-        "text2", styles["entry"](lockout.entry),
+        "text2", formatLockoutEntry(lockout.entry, time_ago),
         "font2", locale_font,
         "justify2", "LEFT",
         "text3", styles["class"](lockout.name, lockout.class),
         "font3", locale_font,      
         "justify3", "CENTER",
-        "text4", styles["status"](lockout.saved),
+        "text4", styles["status"](lockout.saved, lockout.added),
         "font4", locale_font,
         "justify4", "CENTER",
         "text5", styles["instance"](instance_name),
@@ -470,7 +520,7 @@ do
       local lockouts = FonzSaved.require("lockout").getLockouts()
       local n = lockouts and getn(lockouts) or 0
       
-      LibTablet:SetTitle(format("%s - %s", A.name, "Lockouts"))
+      LibTablet:SetTitle(format("%s - %s", A.name, L["Instances"]))
       LibTablet:SetHint(format(L["Release %s button to view saved instances."], 
         color_keypress(L["Shift"])))
       
