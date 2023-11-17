@@ -677,7 +677,6 @@ do
 end
 
 do  
-  local first_login_world = true
   local first_login_party = true
   local is_solo = true
   
@@ -707,21 +706,13 @@ do
   end
 
   function frame:PLAYER_ENTERING_WORLD()
-    -- Note. Necessary to use Unit functions before group events fire for
-    -- reliable group status.
+    -- Necessary to use Unit functions before group events fire for reliable 
+    -- group status.
     is_solo = not (UnitInRaid("player") or UnitInParty("player"))
-
-    -- Stop if already logged into world
-    if not first_login_world then return end
-    first_login_world = false
-    
-    -- Stop if not in an instance
-    local is_instance, instance_type = isPveInstance()
-    if not is_instance then return end
-    
-    A.trace("Logged into an instance. Checking for new lockout.")
-    -- Schedule lockouts check due to lack of updates to zone API
-    schedule(checkLockouts, 5.0) -- delay 5s
+  end
+  
+  function frame:ZONE_CHANGED_NEW_AREA()
+    checkLockouts()
   end
 end
 
@@ -1061,6 +1052,11 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 -- This is more reliable than "ZONE_CHANGED_NEW_AREA" due to some instances
 -- inside the same zone name as their entrance, e.g. Sunken Temple.
 frame:RegisterEvent("UPDATE_INSTANCE_INFO")
+
+-- Fires when the player moves between major zones or enters/exits an instance.
+-- Useful to check for lockouts when new lockouts are denied in events where the
+-- zone API has not loaded yet, e.g. PLAYER_ENTERING_WORLD
+frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 
 frame:SetScript("OnEvent", function()
   local event_method = frame[event]
