@@ -758,6 +758,32 @@ local reset_messages = {
   end,
 }
 
+do
+  -- Time in seconds
+  local DELAYS = {
+    normal = 3,
+    difficulty = 3,
+  }
+  local last_times = {}
+  
+  function resetSeen(tag)
+    last_times[tag] = nil
+  end
+  
+  -- No point spamming the server too often. Create throttle function
+  function seen(tag)
+    local last_time = last_times[tag]
+    
+    if not last_time or (GetTime() - last_time > DELAYS[tag]) then
+      A.debug("[module: %s] %s %s", module_name, tag, "cache miss")
+      last_times[tag] = GetTime()
+      return false
+    end
+    
+    return true
+  end
+end
+
 function compareLastInstance(zone, entry, instance_type, difficulty)
   local lockouts = getLockouts()
   local n = lockouts and getn(lockouts) or 0
@@ -935,6 +961,9 @@ do
   end
   
   local function sendReset(reset_type, group, lockout)
+    -- Spam protection, e.g. from multiple different instances reset
+    if seen(reset_type) then return end
+    
     local payload
     if lockout then
       payload = formatPayload(lockout.zone, lockout.entry, lockout.type,

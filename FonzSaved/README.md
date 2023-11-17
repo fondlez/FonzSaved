@@ -92,7 +92,7 @@ instance you enter to the list. That instance will be shown as "added".
 * On a standard server there is no way to confirm instance lockout information
 before hitting the limit. This means it may be possible in some uncommon 
 situations that fake additional lockouts are created by the addon. You can 
-delete these lockouts with the `/locked del #` command where `#` is the lockout 
+delete these lockouts with the `/lockout del #` command where `#` is the lockout 
 index.
 * FonzSavedFu uses popular shared libraries for convenient graphical support. 
 This means it is possible, though unlikely, for it to conflict with some other 
