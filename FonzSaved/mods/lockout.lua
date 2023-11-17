@@ -961,9 +961,6 @@ do
   end
   
   local function sendReset(reset_type, group, lockout)
-    -- Spam protection, e.g. from multiple different instances reset
-    if seen(reset_type) then return end
-    
     local payload
     if lockout then
       payload = formatPayload(lockout.zone, lockout.entry, lockout.type,
@@ -999,6 +996,9 @@ do
       A.trace("resetLockouts(true) from ERR_DUNGEON_DIFFICULTY_CHANGED_S")
       resetLockouts(true)
       
+      -- Spam protection, e.g. from multiple different instances reset
+      if seen("difficulty") then return end
+      
       -- If in group and leader, send reset via addon channel.
       -- No need to announce this type of reset since it is visible to group.
       local group = isPveGroup()
@@ -1013,8 +1013,12 @@ do
     local reset_instance = strmatch(msg, PATTERNS["INSTANCE_RESET_SUCCESS"])
     if reset_instance then
       -- Reset normals only
+      A.trace("resetLockouts() from INSTANCE_RESET_SUCCESS")
       resetLockouts(nil, reset_instance)
 
+      -- Spam protection, e.g. from multiple different instances reset
+      if seen("normal") then return end
+      
       -- If in group and leader, announce to group and send reset via addon 
       -- channel.
       local group = isPveGroup()
