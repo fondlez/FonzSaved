@@ -25,6 +25,8 @@ local realm_defaults = {
 
 A.registerRealmDefaults(module_name, realm_defaults)
 
+local GetAddOnMetadata = GetAddOnMetadata
+local UnitFactionGroup = UnitFactionGroup
 local UnitName = UnitName
 local UnitClass = UnitClass
 
@@ -311,6 +313,12 @@ frame:SetScript("OnEvent", function()
   A.is_loaded = true
   A.loaded_name = A.name
   
+  A.title = GetAddOnMetadata(name, "Title")
+  A.version = GetAddOnMetadata(name, "Version")
+  A.author = GetAddOnMetadata(name, "Author")
+  A.notes = GetAddOnMetadata(name, "Notes")
+  A.website = GetAddOnMetadata(name, "X-Website")
+  
   A.player = { 
     name = UnitName("player"),
     class = UnitClass("player"),
@@ -358,7 +366,7 @@ do
   }
   
   function M.setLang(lang)
-    local db = A.getCharConfig(module_name)
+    local db = A.getProfileRealm(module_name)
     A.locale_info.code = lang or db.lang or A.locale_info.code
   end
 
