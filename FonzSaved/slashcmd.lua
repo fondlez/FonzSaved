@@ -313,11 +313,11 @@ frame:SetScript("OnEvent", function()
   A.is_loaded = true
   A.loaded_name = A.name
   
-  A.title = GetAddOnMetadata(name, "Title")
-  A.version = GetAddOnMetadata(name, "Version")
-  A.author = GetAddOnMetadata(name, "Author")
-  A.notes = GetAddOnMetadata(name, "Notes")
-  A.website = GetAddOnMetadata(name, "X-Website")
+  A.title = GetAddOnMetadata(A.name, "Title")
+  A.version = GetAddOnMetadata(A.name, "Version")
+  A.author = GetAddOnMetadata(A.name, "Author")
+  A.notes = GetAddOnMetadata(A.name, "Notes")
+  A.website = GetAddOnMetadata(A.name, "X-Website")
   
   A.player = { 
     name = UnitName("player"),
